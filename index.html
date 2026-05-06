@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FireGIS Dashboard</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <!-- Heatmap -->
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial;
+        }
+
+        body {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            background: #f4f6f9;
+        }
+
+        /* SIDEBAR */
+        .sidebar {
+            width: 280px;
+            background: #1e1e2f;
+            color: white;
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            color: #ff4d4d;
+            margin-bottom: 10px;
+        }
+
+        .card {
+            background: #2a2a3d;
+            padding: 10px;
+            margin: 8px 0;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 6px;
+            margin-top: 5px;
+            border-radius: 5px;
+            border: none;
+        }
+
+        button {
+            width: 100%;
+            padding: 8px;
+            margin-top: 8px;
+            background: #ff4d4d;
+            border: none;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #ff1a1a;
+        }
+
+        /* MAP */
+        #map {
+            flex: 1;
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+<!-- 🔵 SIDEBAR -->
+<div class="sidebar">
+    <h2>🔥 FireGIS</h2>
+
+    <div class="card">
+        Status: 🟢 Online
+    </div>
+
+    <div class="card">
+        Total Incidents: <span id="totalIncidents">0</span>
+    </div>
+
+    <div class="card">
+        High Risk: <span id="highRisk">0</span>
+    </div>
+
+    <div class="card">
+        <form id="reportForm">
+            <input type="text" id="description" placeholder="Incident description" required>
+
+            <select id="severity">
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+            </select>
+
+            <button type="submit">Report Incident</button>
+        </form>
+    </div>
+</div>
+
+<!-- 🗺️ MAP -->
+<div id="map"></div>
+
+<script>
+var map = L.map('map').setView([13.7565, 121.0583], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: 'FireGIS System'
+}).addTo(map);
+
+let selectedLatLng = null;
+let heatLayer;
+
+// 🚒 FIRE STATIONS
+const stations = [
+    { name: "BFP Rosario", lat: 13.8445, lng: 121.2060 },
+    { name: "BFP Batangas City", lat: 13.7565, lng: 121.0583 },
+    { name: "BFP Lipa", lat: 13.9417, lng: 121.1620 }
+];
+
+// 📍 MAP CLICK
+map.on('click', function(e){
+    selectedLatLng = e.latlng;
+
+    L.marker([e.latlng.lat, e.latlng.lng])
+        .addTo(map)
+        .bindPopup("📌 Selected Location")
+        .openPopup();
+});
+
+// 🔥 LOAD INCIDENTS
+function loadIncidents(){
+
+    fetch("http://127.0.0.1:5000/incidents")
+    .then(res => res.json())
+    .then(data => {
+
+        // STATS
+        document.getElementById("totalIncidents").innerText = data.length;
+        document.getElementById("highRisk").innerText =
+            data.filter(i => i.severity === "High").length;
+
+        // CLEAR MARKERS
+        map.eachLayer(layer => {
+            if(layer instanceof L.CircleMarker){
+                map.removeLayer(layer);
+            }
+        });
+
+        let heatPoints = [];
+
+        data.forEach(inc => {
+
+            let color =
+                inc.severity === "High" ? "red" :
+                inc.severity === "Medium" ? "orange" : "green";
+
+            L.circleMarker([inc.lat, inc.lng], {
+                radius: 7,
+                color: color
+            })
+            .addTo(map)
+            .bindPopup(
+                "🔥 " + inc.description +
+                "<br>Severity: " + inc.severity +
+                "<br>Time: " + inc.timestamp
+            );
+
+            let intensity =
+                inc.severity === "High" ? 1 :
+                inc.severity === "Medium" ? 0.6 : 0.3;
+
+            heatPoints.push([inc.lat, inc.lng, intensity]);
+        });
+
+        // HEATMAP
+        if(heatLayer) map.removeLayer(heatLayer);
+
+        heatLayer = L.heatLayer(heatPoints, {
+            radius: 25,
+            blur: 15
+        }).addTo(map);
+    });
+}
+
+// 🚒 DISTANCE FUNCTION
+function getDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+
+    const a =
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI/180) *
+        Math.cos(lat2 * Math.PI/180) *
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// 🚒 NEAREST STATION
+function findNearestStation(lat, lng){
+
+    let nearest = null;
+    let minDist = Infinity;
+
+    stations.forEach(s => {
+        let dist = getDistance(lat, lng, s.lat, s.lng);
+
+        if(dist < minDist){
+            minDist = dist;
+            nearest = s;
+        }
+    });
+
+    alert(
+        "🚒 Nearest Station: " + nearest.name +
+        "\nDistance: " + minDist.toFixed(2) + " km"
+    );
+}
+
+// 🔥 SUBMIT REPORT
+document.getElementById("reportForm").addEventListener("submit", function(e){
+    e.preventDefault();
+
+    let desc = document.getElementById("description").value;
+    let severity = document.getElementById("severity").value;
+
+    if(!selectedLatLng){
+        alert("Please select location on map");
+        return;
+    }
+
+    fetch("http://127.0.0.1:5000/report", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+            description: desc,
+            severity: severity,
+            lat: selectedLatLng.lat,
+            lng: selectedLatLng.lng
+        })
+    })
+    .then(() => {
+
+        alert("Incident saved!");
+
+        // AI PREDICTION
+        fetch("http://127.0.0.1:5000/predict", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ description: desc })
+        })
+        .then(res => res.json())
+        .then(data => {
+            alert(
+                "AI Prediction: " + data.predicted_severity +
+                "\nRecommendation: " + data.recommendation
+            );
+        });
+
+        // NEAREST STATION
+        findNearestStation(selectedLatLng.lat, selectedLatLng.lng);
+
+        document.getElementById("reportForm").reset();
+        selectedLatLng = null;
+
+        loadIncidents();
+    });
+});
+
+// 🚀 INIT
+loadIncidents();
+setInterval(loadIncidents, 5000);
+
+</script>
+</body>
+</html>
