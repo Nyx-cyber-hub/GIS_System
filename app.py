@@ -3,9 +3,10 @@ from flask_cors import CORS
 import sqlite3
 import pickle
 
-app = Flask(__name__)
-CORS(app)
+import os
 
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 DB_NAME = "database.db"
 
 # 🤖 LOAD AI MODEL (DECISION SUPPORT SYSTEM)
